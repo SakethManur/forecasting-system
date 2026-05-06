@@ -112,7 +112,7 @@ Forecast one state:
 
 ```json
 {
-  "state": "Maharashtra",
+  "state": "California",
   "weeks_ahead": 8
 }
 ```
