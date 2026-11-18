@@ -2,8 +2,6 @@
 
 Production-ready Python/FastAPI project for state-level sales forecasting from an Excel dataset.
 
-For a company-review friendly overview of the project, see [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md).
-
 ## Features
 
 - Loads sales data from Excel.
