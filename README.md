@@ -80,6 +80,15 @@ python -m training.train --excel-path data/sales.xlsx --models sarima xgboost
 
 Model artifacts are written under `models/`, forecast plots are written under `artifacts/plots/`, model comparison reports are written to `artifacts/model_comparison.csv` and `artifacts/model_comparison.json`, and MLflow runs are written under `mlruns/` by default.
 
+## Run Tests
+
+```powershell
+pip install -r requirements-dev.txt
+pytest --cov=training --cov=utils --cov=api
+```
+
+The suite has 49 tests (89% line coverage). It covers data loading and weekly bucketing, validation scoring on real periods only, the naive baseline, the comparison report, the CLI, the FastAPI endpoints, and an end-to-end run that trains all four model families on a small synthetic dataset. Tests write only to a temporary folder and never touch `data/`, `models/`, `artifacts/`, `logs/` or `mlruns/`.
+
 ## Run API
 
 ```powershell
