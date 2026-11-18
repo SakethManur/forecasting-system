@@ -10,8 +10,8 @@ For a company-review friendly overview of the project, see [docs/PROJECT_DOCUMEN
 - Handles missing dates and missing sales values per state.
 - Builds lag, rolling, calendar, and holiday features.
 - Trains and compares SARIMA, Prophet, XGBoost, and TensorFlow/Keras LSTM.
-- Uses time-series train/validation split.
-- Evaluates RMSE and MAE.
+- Uses time-series train/validation split, scored only on real (non-interpolated) periods.
+- Evaluates RMSE, MAE and MAPE, and compares every state against a naive baseline.
 - Selects and persists the best model for each state.
 - Tracks runs and metrics in MLflow.
 - Saves forecast visualization plots for each state.
@@ -54,7 +54,7 @@ $env:STATE_COLUMN="State"
 $env:SALES_COLUMN="Sales"
 ```
 
-Rows with duplicate `state` and `date` values are summed. Missing daily dates are inserted per state, and missing sales values are filled with time interpolation plus forward/backward fallback.
+Rows with duplicate `state` and `date` values are summed. Each state's rows are then bucketed into its cadence (daily, weekly or monthly; weeks are anchored on the most common weekday). Rows on different days of the same period are averaged, so no reading is dropped for falling off the anchor day. Empty periods are inserted and filled with time interpolation plus forward/backward fallback, and an `is_observed` flag records which periods hold real data.
 
 ## Setup
 
@@ -139,6 +139,7 @@ MLFLOW_TRACKING_URI=file:///absolute/path/to/mlruns
 MLFLOW_EXPERIMENT_NAME=retail_sales_forecasting
 FORECAST_HORIZON_DAYS=56
 VALIDATION_DAYS=56
+MIN_VALIDATION_OBSERVATIONS=8
 MINIMUM_TRAINING_DAYS=90
 LSTM_SEQUENCE_LENGTH=30
 ```
@@ -148,7 +149,7 @@ LSTM_SEQUENCE_LENGTH=30
 Training writes all model runs to the `retail_sales_forecasting` experiment. Each SARIMA, Prophet, XGBoost, and LSTM run logs:
 
 ```text
-model_type, state, RMSE, MAE, training_time, hyperparameters, metrics, parameters, artifacts
+model_type, state, RMSE, MAE, MAPE, training_time, validation_observations, hyperparameters, metrics, parameters, artifacts
 ```
 
 Start the MLflow UI:
@@ -176,7 +177,9 @@ LOG_BACKUP_COUNT=5
 
 ## Notes
 
-- The split is chronological: the last `VALIDATION_DAYS` are reserved for validation.
+- The split is chronological: the last `VALIDATION_DAYS` are reserved for validation, extended back until the window holds at least `MIN_VALIDATION_OBSERVATIONS` real periods.
+- Metrics are computed on real observations only. Interpolated periods are never scored, because a model that reproduces the interpolation would otherwise look near-perfect.
+- Every state is also scored against a naive baseline (the last real training value, repeated). `artifacts/model_comparison.json` reports how much the selected models improve on it in `baseline_summary`.
 - XGBoost forecasts recursively using the required lag and rolling features.
 - SARIMA uses a weekly seasonal component by default.
 - Prophet uses weekly and yearly seasonality.

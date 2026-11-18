@@ -107,9 +107,12 @@ def _read_excel_with_openpyxl(path: Path) -> pd.DataFrame:
 def prepare_daily_sales(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Return one complete regular time series per state.
 
-    Duplicate state/date rows are aggregated. Missing dates for the inferred
-    cadence are inserted, and sales gaps are filled with interpolation plus
-    forward/backward fallback.
+    Duplicate state/date rows are summed. Rows are then bucketed into the
+    inferred cadence: readings on different days of the same period are
+    averaged, so a row that does not fall exactly on the period anchor is kept
+    rather than dropped. Empty periods are inserted and their sales filled with
+    interpolation plus forward/backward fallback. ``is_observed`` marks the
+    periods backed by real rows, so validation can score real data only.
     """
 
     required = {"date", "state", "sales", "holiday_flag"}
@@ -127,11 +130,15 @@ def prepare_daily_sales(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     state_frames: dict[str, pd.DataFrame] = {}
     for state, state_df in grouped.groupby("state"):
         frequency, step_days = infer_frequency(state_df["date"])
-        state_df = state_df.set_index("date").sort_index()
-        full_index = pd.date_range(state_df.index.min(), state_df.index.max(), freq=frequency)
-        state_df = state_df.reindex(full_index)
+        state_df = (
+            state_df.set_index("date")
+            .sort_index()[["sales", "holiday_flag"]]
+            .resample(frequency)
+            .agg({"sales": "mean", "holiday_flag": "max"})
+        )
         state_df.index.name = "date"
         state_df["state"] = state
+        state_df["is_observed"] = state_df["sales"].notna()
         state_df["sales"] = (
             state_df["sales"]
             .interpolate(method="time")
@@ -140,7 +147,9 @@ def prepare_daily_sales(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             .fillna(0.0)
         )
         state_df["holiday_flag"] = state_df["holiday_flag"].fillna(0).astype(int)
-        prepared = state_df.reset_index()[["date", "state", "sales", "holiday_flag"]]
+        prepared = state_df.reset_index()[
+            ["date", "state", "sales", "holiday_flag", "is_observed"]
+        ]
         prepared.attrs["frequency"] = frequency
         prepared.attrs["step_days"] = step_days
         state_frames[state] = prepared
@@ -155,9 +164,11 @@ def infer_frequency(dates: pd.Series) -> tuple[str, int]:
 
     deltas = ordered.diff().dropna().dt.days
     median_days = int(max(1, round(float(deltas.median()))))
-    first_day = ordered.iloc[0].day_name()[:3].upper()
+    # Anchor weeks on the most common weekday, not the first row's weekday, so
+    # period labels line up with the bulk of the real dates.
+    anchor_day = ordered.dt.day_name().mode().iloc[0][:3].upper()
     if 5 <= median_days <= 9:
-        return f"W-{first_day}", 7
+        return f"W-{anchor_day}", 7
     if 27 <= median_days <= 32:
         return "MS", 30
     return "D", 1

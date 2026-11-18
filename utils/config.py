@@ -35,6 +35,9 @@ class Settings:
     frequency: str = os.getenv("FORECAST_FREQUENCY", "D")
     forecast_horizon_days: int = int(os.getenv("FORECAST_HORIZON_DAYS", "56"))
     validation_days: int = int(os.getenv("VALIDATION_DAYS", "56"))
+    # The validation window is extended back until it holds at least this many
+    # periods with real (non-interpolated) sales, which are the only ones scored.
+    min_validation_observations: int = int(os.getenv("MIN_VALIDATION_OBSERVATIONS", "8"))
     minimum_training_days: int = int(os.getenv("MINIMUM_TRAINING_DAYS", "90"))
     lstm_sequence_length: int = int(os.getenv("LSTM_SEQUENCE_LENGTH", "30"))
     random_state: int = int(os.getenv("RANDOM_STATE", "42"))

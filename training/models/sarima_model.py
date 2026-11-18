@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-from training.metrics import regression_metrics
+from training.metrics import validation_metrics
 from training.models.common import ModelResult
 from utils.model_io import save_joblib_model
 
@@ -35,7 +35,7 @@ def train_sarima(train_df: pd.DataFrame, val_df: pd.DataFrame, state: str) -> Mo
         fitted = model.fit(disp=False)
 
     predictions = np.asarray(fitted.forecast(steps=len(val_df)))
-    metrics = regression_metrics(val_df["sales"], predictions)
+    metrics = validation_metrics(val_df, predictions)
     artifact_path = save_joblib_model(fitted, state, MODEL_NAME)
     return ModelResult(MODEL_NAME, predictions, metrics, artifact_path, hyperparameters)
 

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
-from training.metrics import regression_metrics
+from training.metrics import validation_metrics
 from training.models.common import ModelResult
 from utils.config import settings
 from utils.model_io import state_model_dir
@@ -78,7 +78,7 @@ def train_lstm(train_df: pd.DataFrame, val_df: pd.DataFrame, state: str) -> Mode
     )
 
     predictions = recursive_predict_lstm(model, scaler, train_df, len(val_df), sequence_length)
-    metrics = regression_metrics(val_df["sales"], predictions)
+    metrics = validation_metrics(val_df, predictions)
     artifact_path = _save_lstm_artifacts(model, scaler, state)
     return ModelResult(MODEL_NAME, predictions, metrics, artifact_path, hyperparameters)
 

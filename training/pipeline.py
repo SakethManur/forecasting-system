@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from training.data_loader import load_sales_excel, prepare_daily_sales
+from training.metrics import validation_metrics
 from training.models.common import ModelResult
 from training.reporting import generate_model_comparison_report
 from training.visualization import plot_state_forecast
@@ -68,6 +69,8 @@ def train_all_states(
             continue
 
         train_df, val_df = _time_series_split(state_df)
+        validation_observations = _observed_count(val_df)
+        baseline = _naive_baseline(train_df, val_df)
         save_history(state_df, state)
 
         state_results: dict[str, dict[str, Any]] = {}
@@ -86,6 +89,7 @@ def train_all_states(
                         state=state,
                         train_rows=len(train_df),
                         validation_rows=len(val_df),
+                        validation_observations=validation_observations,
                         frequency=str(state_df.attrs.get("frequency", settings.frequency)),
                         step_days=int(state_df.attrs.get("step_days", 1)),
                         training_time=training_time,
@@ -121,6 +125,12 @@ def train_all_states(
             "best_model": best_result.name,
             "best_metrics": best_result.metrics,
             "models": state_results,
+            "baseline": baseline,
+            "rmse_improvement_vs_baseline_pct": _improvement_pct(
+                baseline["metrics"]["rmse"], best_result.metrics["rmse"]
+            ),
+            "validation_periods": len(val_df),
+            "validation_observations": validation_observations,
             "frequency": state_df.attrs.get("frequency", settings.frequency),
             "step_days": int(state_df.attrs.get("step_days", 1)),
             "last_train_date": str(train_df["date"].max().date()),
@@ -215,7 +225,7 @@ def _predict_with_model(
         from training.models.prophet_model import predict_prophet
 
         model = load_joblib_model(state, PROPHET_NAME)
-        predictions = predict_prophet(model, horizon)
+        predictions = predict_prophet(model, history, horizon, frequency)
     elif model_name == XGBOOST_NAME:
         from training.models.xgboost_model import recursive_predict_xgboost
 
@@ -287,19 +297,64 @@ def _trainer_registry() -> dict[str, Callable[[pd.DataFrame, pd.DataFrame, str],
 
 def _validate_state_history(state_df: pd.DataFrame, state: str) -> None:
     step_days = int(state_df.attrs.get("step_days", 1))
-    required_rows = _horizon_periods(settings.minimum_training_days, step_days) + _horizon_periods(
-        settings.validation_days, step_days
-    )
-    if len(state_df) < required_rows:
+    required_train_rows = _horizon_periods(settings.minimum_training_days, step_days)
+    validation_periods = _validation_periods(state_df)
+    if len(state_df) - validation_periods < required_train_rows:
         raise DataValidationError(
-            f"State '{state}' has {len(state_df)} daily rows; at least "
-            f"{required_rows} are required."
+            f"State '{state}' has {len(state_df)} rows; {validation_periods} are used for "
+            f"validation and at least {required_train_rows} are required for training."
+        )
+    if _observed_count(state_df.iloc[-validation_periods:]) == 0:
+        raise DataValidationError(
+            f"State '{state}' has no real observations in its validation window."
         )
 
 
-def _time_series_split(state_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _validation_periods(state_df: pd.DataFrame) -> int:
+    """Number of trailing periods held out for validation.
+
+    Starts from VALIDATION_DAYS and extends back until the window holds
+    MIN_VALIDATION_OBSERVATIONS real (non-interpolated) periods, because only
+    those are scored.
+    """
+
     step_days = int(state_df.attrs.get("step_days", 1))
-    validation_periods = _horizon_periods(settings.validation_days, step_days)
+    periods = _horizon_periods(settings.validation_days, step_days)
+    if "is_observed" not in state_df.columns:
+        return periods
+    observed_positions = np.flatnonzero(state_df["is_observed"].to_numpy(dtype=bool))
+    needed = settings.min_validation_observations
+    if len(observed_positions) >= needed:
+        periods = max(periods, len(state_df) - int(observed_positions[-needed]))
+    return periods
+
+
+def _observed_count(df: pd.DataFrame) -> int:
+    if "is_observed" not in df.columns:
+        return len(df)
+    return int(df["is_observed"].sum())
+
+
+def _naive_baseline(train_df: pd.DataFrame, val_df: pd.DataFrame) -> dict[str, Any]:
+    """Score a naive forecast: the last real training value, repeated."""
+
+    observed = train_df[train_df["is_observed"]] if "is_observed" in train_df.columns else train_df
+    last_value = float(observed["sales"].iloc[-1])
+    predictions = np.full(len(val_df), last_value)
+    return {
+        "method": "naive_last_observed_value",
+        "metrics": validation_metrics(val_df, predictions),
+    }
+
+
+def _improvement_pct(baseline_rmse: float, model_rmse: float) -> float | None:
+    if not baseline_rmse:
+        return None
+    return float((baseline_rmse - model_rmse) / baseline_rmse * 100)
+
+
+def _time_series_split(state_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    validation_periods = _validation_periods(state_df)
     split_index = len(state_df) - validation_periods
     train_df = state_df.iloc[:split_index].reset_index(drop=True)
     val_df = state_df.iloc[split_index:].reset_index(drop=True)
@@ -318,6 +373,7 @@ def _log_mlflow_run(
     state: str,
     train_rows: int,
     validation_rows: int,
+    validation_observations: int,
     frequency: str,
     step_days: int,
     training_time: float,
@@ -331,11 +387,14 @@ def _log_mlflow_run(
     mlflow.log_param("state", state)
     mlflow.log_param("train_rows", train_rows)
     mlflow.log_param("validation_rows", validation_rows)
+    mlflow.log_param("validation_observations", validation_observations)
     mlflow.log_param("frequency", frequency)
     mlflow.log_param("step_days", step_days)
     mlflow.log_params(_stringify_params(result.hyperparameters))
     mlflow.log_metric("RMSE", result.metrics["rmse"])
     mlflow.log_metric("MAE", result.metrics["mae"])
+    if np.isfinite(result.metrics.get("mape", float("nan"))):
+        mlflow.log_metric("MAPE", result.metrics["mape"])
     mlflow.log_metric("training_time", training_time)
     if result.artifact_path.is_dir():
         mlflow.log_artifacts(str(result.artifact_path), artifact_path="model")
@@ -348,6 +407,7 @@ def _log_mlflow_run(
         "metrics": {
             "RMSE": result.metrics["rmse"],
             "MAE": result.metrics["mae"],
+            "MAPE": result.metrics.get("mape"),
             "training_time": training_time,
         },
         "parameters": result.hyperparameters,

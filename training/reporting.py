@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -27,9 +28,25 @@ def generate_model_comparison_report(
                     "model_name": model_name,
                     "RMSE": metrics.get("rmse"),
                     "MAE": metrics.get("mae"),
+                    "MAPE": metrics.get("mape"),
                     "training_time": model_info.get("training_time"),
                     "selected_best_model": selected_best_model,
                     "status": model_info.get("status"),
+                }
+            )
+        baseline = metadata.get("baseline")
+        if baseline:
+            rows.append(
+                {
+                    "state": state,
+                    "model_name": baseline["method"],
+                    "RMSE": baseline["metrics"].get("rmse"),
+                    "MAE": baseline["metrics"].get("mae"),
+                    "MAPE": baseline["metrics"].get("mape"),
+                    "training_time": None,
+                    "selected_best_model": selected_best_model,
+                    # Not "trained", so it never enters the model ranking.
+                    "status": "baseline",
                 }
             )
 
@@ -39,11 +56,13 @@ def generate_model_comparison_report(
     comparison_df.to_csv(csv_path, index=False)
 
     ranked_summary = _rank_best_models(comparison_df)
+    baseline_summary = _baseline_summary(registry)
     payload = {
         "model_comparison": comparison_df.where(pd.notna(comparison_df), None).to_dict(
             orient="records"
         ),
         "ranked_summary": ranked_summary,
+        "baseline_summary": baseline_summary,
     }
     with json_path.open("w", encoding="utf-8") as file:
         json.dump(payload, file, indent=2)
@@ -52,6 +71,26 @@ def generate_model_comparison_report(
         "csv_path": str(csv_path),
         "json_path": str(json_path),
         "ranked_summary": ranked_summary,
+        "baseline_summary": baseline_summary,
+    }
+
+
+def _baseline_summary(registry: dict[str, Any]) -> dict[str, Any]:
+    """How much the selected models beat the naive baseline, across states."""
+
+    improvements = [
+        metadata["rmse_improvement_vs_baseline_pct"]
+        for metadata in registry.get("states", {}).values()
+        if metadata.get("rmse_improvement_vs_baseline_pct") is not None
+    ]
+    if not improvements:
+        return {}
+    return {
+        "baseline": "naive_last_observed_value",
+        "states_compared": len(improvements),
+        "states_where_best_model_beats_baseline": int(sum(pct > 0 for pct in improvements)),
+        "mean_rmse_improvement_pct": float(np.mean(improvements)),
+        "median_rmse_improvement_pct": float(np.median(improvements)),
     }
 
 

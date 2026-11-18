@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
 from training.features import FEATURE_COLUMNS, make_next_feature_row, make_supervised_frame
-from training.metrics import regression_metrics
+from training.metrics import validation_metrics
 from training.models.common import ModelResult
 from utils.config import settings
 from utils.model_io import save_joblib_model
@@ -49,7 +49,7 @@ def train_xgboost(train_df: pd.DataFrame, val_df: pd.DataFrame, state: str) -> M
     )
     model.fit(supervised[FEATURE_COLUMNS], supervised["sales"])
     predictions = recursive_predict_xgboost(model, train_df, len(val_df))
-    metrics = regression_metrics(val_df["sales"], predictions)
+    metrics = validation_metrics(val_df, predictions)
     artifact_path = save_joblib_model(model, state, MODEL_NAME)
     return ModelResult(MODEL_NAME, predictions, metrics, artifact_path, hyperparameters)
 
